@@ -1,4 +1,4 @@
-module github.com/yourusername/dns-er
+module github.com/shinplex/dns-er
 
 go 1.21
 
