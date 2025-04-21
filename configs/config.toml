@@ -1,0 +1,18 @@
+# DNS Server Configuration
+
+[server]
+listen = "0.0.0.0"    # Listen on all interfaces
+port = 53             # Standard DNS port
+log_queries = true    # Log all DNS queries
+records_file = "records.toml"  # Path to the records file
+
+# Upstream DNS servers
+[upstreams.cloudflare]
+address = "1.1.1.1"
+port = 53
+protocol = "udp"
+
+[upstreams.google]
+address = "8.8.8.8"
+port = 53
+protocol = "udp"

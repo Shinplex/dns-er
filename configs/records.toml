@@ -1,0 +1,59 @@
+# DNS Records Configuration
+# This file contains custom DNS records
+# The server will check these records before forwarding to upstream servers
+
+# Each [[records]] section represents a single DNS record
+# A record examples:
+[[records]]
+domain = "example.com"
+type = "A"
+value = "192.168.1.1"
+ttl = 3600
+
+[[records]]
+domain = "test.example.com"
+type = "A"
+value = "192.168.1.2"
+ttl = 3600
+
+# AAAA record example:
+[[records]]
+domain = "ipv6.example.com"
+type = "AAAA"
+value = "2001:db8::1"
+ttl = 3600
+
+# CNAME record example:
+[[records]]
+domain = "www.example.com"
+type = "CNAME"
+value = "example.com"
+ttl = 3600
+
+# Wildcard example (matches any direct subdomain):
+[[records]]
+domain = "*.wildcard.com"
+type = "A"
+value = "192.168.1.10"
+ttl = 3600
+
+# Multiple level wildcard example (matches any level of subdomain):
+[[records]]
+domain = "_**.deepwildcard.com"
+type = "A" 
+value = "192.168.1.20"
+ttl = 3600
+
+# TXT record example:
+[[records]]
+domain = "txt.example.com"
+type = "TXT"
+value = "This is a TXT record"
+ttl = 3600
+
+# MX record example (format: priority hostname):
+[[records]]
+domain = "mail.example.com"
+type = "MX"
+value = "10 mail.example.com"
+ttl = 3600
