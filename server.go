@@ -63,132 +63,148 @@ func (s *DNSServer) Stop() error {
 
 // handleRequest processes incoming DNS requests
 func (s *DNSServer) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	if len(r.Question) == 0 {
+		s.sendServerFailure(w, r, fmt.Errorf("empty question section"))
+		return
+	}
+
+	q := r.Question[0]
+
 	// Log query if enabled
-	if s.config.Server.LogQueries && len(r.Question) > 0 {
-		q := r.Question[0]
+	if s.config.Server.LogQueries {
 		log.Printf("Query: %s, Type: %s", q.Name, dns.TypeToString[q.Qtype])
 	}
 
-	// Check if we have a local record for this query
-	if len(r.Question) > 0 {
-		q := r.Question[0]
-		recordType := dns.TypeToString[q.Qtype]
-		domain := getDomainFromQuestion(q)
-		
-		if record := FindMatchingRecord(domain, recordType); record != nil {
-			// We have a matching record, return it
-			m := new(dns.Msg)
-			m.SetReply(r)
-			
-			switch recordType {
-			case "A":
-				m.Answer = append(m.Answer, &dns.A{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeA,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					A: net.ParseIP(record.Value),
-				})
-			case "AAAA":
-				m.Answer = append(m.Answer, &dns.AAAA{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeAAAA,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					AAAA: net.ParseIP(record.Value),
-				})
-			case "CNAME":
-				m.Answer = append(m.Answer, &dns.CNAME{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeCNAME,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					Target: dns.Fqdn(record.Value),
-				})
-			case "TXT":
-				m.Answer = append(m.Answer, &dns.TXT{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeTXT,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					Txt: []string{record.Value},
-				})
-			case "MX":
-				parts := strings.Split(record.Value, " ")
-				priority := uint16(10) // Default priority
-				target := parts[0]
-				
-				if len(parts) > 1 {
-					if p, err := strconv.Atoi(parts[0]); err == nil {
-						priority = uint16(p)
-						target = parts[1]
-					}
-				}
-				
-				m.Answer = append(m.Answer, &dns.MX{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeMX,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					Preference: priority,
-					Mx:         dns.Fqdn(target),
-				})
-			case "NS":
-				m.Answer = append(m.Answer, &dns.NS{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypeNS,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					Ns: dns.Fqdn(record.Value),
-				})
-			case "PTR":
-				m.Answer = append(m.Answer, &dns.PTR{
-					Hdr: dns.RR_Header{
-						Name:   q.Name,
-						Rrtype: dns.TypePTR,
-						Class:  dns.ClassINET,
-						Ttl:    uint32(record.TTL),
-					},
-					Ptr: dns.Fqdn(record.Value),
-				})
-			}
-			
-			if len(m.Answer) > 0 {
-				if s.config.Server.LogQueries {
-					log.Printf("Response for %s from local records: %s", domain, recordType)
-				}
-				w.WriteMsg(m)
-				return
-			}
+	// Try to respond from local records first
+	if s.handleLocalRecord(w, r, q) {
+		return
+	}
+
+	// Forward to upstream if no local record found
+	s.handleUpstreamRequest(w, r)
+}
+
+// handleLocalRecord attempts to respond using a local DNS record
+// Returns true if a local record was found and used
+func (s *DNSServer) handleLocalRecord(w dns.ResponseWriter, r *dns.Msg, q dns.Question) bool {
+	recordType := dns.TypeToString[q.Qtype]
+	domain := getDomainFromQuestion(q)
+
+	record := FindMatchingRecord(domain, recordType)
+	if record == nil {
+		return false
+	}
+
+	// Create response
+	m := new(dns.Msg)
+	m.SetReply(r)
+
+	// Add appropriate record to answer
+	s.addRecordToMsg(m, q, record, recordType)
+
+	// Only send if we added an answer
+	if len(m.Answer) > 0 {
+		if s.config.Server.LogQueries {
+			log.Printf("Response for %s from local records: %s", domain, recordType)
+		}
+		w.WriteMsg(m)
+		return true
+	}
+
+	return false
+}
+
+// addRecordToMsg adds the appropriate DNS record to the message based on record type
+func (s *DNSServer) addRecordToMsg(m *dns.Msg, q dns.Question, record *RecordEntry, recordType string) {
+	header := dns.RR_Header{
+		Name:  q.Name,
+		Class: dns.ClassINET,
+		Ttl:   uint32(record.TTL),
+	}
+
+	switch recordType {
+	case "A":
+		header.Rrtype = dns.TypeA
+		m.Answer = append(m.Answer, &dns.A{
+			Hdr: header,
+			A:   net.ParseIP(record.Value),
+		})
+	case "AAAA":
+		header.Rrtype = dns.TypeAAAA
+		m.Answer = append(m.Answer, &dns.AAAA{
+			Hdr:  header,
+			AAAA: net.ParseIP(record.Value),
+		})
+	case "CNAME":
+		header.Rrtype = dns.TypeCNAME
+		m.Answer = append(m.Answer, &dns.CNAME{
+			Hdr:    header,
+			Target: dns.Fqdn(record.Value),
+		})
+	case "TXT":
+		header.Rrtype = dns.TypeTXT
+		m.Answer = append(m.Answer, &dns.TXT{
+			Hdr: header,
+			Txt: []string{record.Value},
+		})
+	case "MX":
+		header.Rrtype = dns.TypeMX
+		priority, target := s.parseMXRecord(record.Value)
+		m.Answer = append(m.Answer, &dns.MX{
+			Hdr:        header,
+			Preference: priority,
+			Mx:         dns.Fqdn(target),
+		})
+	case "NS":
+		header.Rrtype = dns.TypeNS
+		m.Answer = append(m.Answer, &dns.NS{
+			Hdr: header,
+			Ns:  dns.Fqdn(record.Value),
+		})
+	case "PTR":
+		header.Rrtype = dns.TypePTR
+		m.Answer = append(m.Answer, &dns.PTR{
+			Hdr: header,
+			Ptr: dns.Fqdn(record.Value),
+		})
+	}
+}
+
+// parseMXRecord parses an MX record value into priority and target
+func (s *DNSServer) parseMXRecord(value string) (uint16, string) {
+	parts := strings.Split(value, " ")
+	priority := uint16(10) // Default priority
+	target := parts[0]
+
+	if len(parts) > 1 {
+		if p, err := strconv.Atoi(parts[0]); err == nil {
+			priority = uint16(p)
+			target = parts[1]
 		}
 	}
 
-	// No matching local record, forward the request to the appropriate upstream server
+	return priority, target
+}
+
+// handleUpstreamRequest forwards the request to an upstream DNS server
+func (s *DNSServer) handleUpstreamRequest(w dns.ResponseWriter, r *dns.Msg) {
 	response, err := s.forwardRequest(r)
 	if err != nil {
-		log.Printf("Error forwarding request: %v", err)
-		// Send a server failure response
-		m := new(dns.Msg)
-		m.SetReply(r)
-		m.SetRcode(r, dns.RcodeServerFailure)
-		w.WriteMsg(m)
+		s.sendServerFailure(w, r, err)
 		return
 	}
 
 	// Send the response
 	w.WriteMsg(response)
+}
+
+// sendServerFailure sends a DNS server failure response
+func (s *DNSServer) sendServerFailure(w dns.ResponseWriter, r *dns.Msg, err error) {
+	log.Printf("Error handling DNS request: %v", err)
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.SetRcode(r, dns.RcodeServerFailure)
+	w.WriteMsg(m)
 }
 
 // forwardRequest forwards a DNS request to the appropriate upstream server

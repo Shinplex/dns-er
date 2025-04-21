@@ -15,9 +15,9 @@ import (
 
 // Config holds the DNS server configuration
 type Config struct {
-	Server    ServerConfig            `toml:"server"`
+	Server    ServerConfig              `toml:"server"`
 	Upstreams map[string]UpstreamConfig `toml:"upstreams"`
-	
+
 	// Added mutex for thread safety
 	mu sync.RWMutex
 }
@@ -41,7 +41,7 @@ type UpstreamConfig struct {
 // RecordsConfig contains all DNS record entries
 type RecordsConfig struct {
 	Records []RecordEntry `toml:"records"`
-	
+
 	// Added mutex for thread safety
 	mu sync.RWMutex
 }
@@ -62,42 +62,42 @@ var Records = &RecordsConfig{
 // LoadConfig loads configuration from a TOML file
 func LoadConfig(filePath string) (*Config, error) {
 	config := &Config{}
-	
+
 	if _, err := toml.DecodeFile(filePath, config); err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
-	
+
 	// Set defaults if not specified
 	if config.Server.Port == 0 {
 		config.Server.Port = 53
 	}
-	
+
 	if config.Server.Listen == "" {
 		config.Server.Listen = "0.0.0.0"
 	}
-	
+
 	// Set default records file if not specified
 	if config.Server.RecordsFile == "" {
 		config.Server.RecordsFile = "configs/records.toml"
 	}
-	
+
 	// Validate config
 	if len(config.Upstreams) == 0 {
 		return nil, fmt.Errorf("no upstream DNS servers configured")
 	}
-	
+
 	// Try to load records
 	if err := LoadRecords(config.Server.RecordsFile); err != nil {
 		log.Printf("Warning: Failed to load records file: %v", err)
 		// Not returning error to allow server to start without records
 	}
-	
+
 	// Start watching for config file changes
 	go WatchConfigFile(filePath)
-	
+
 	// Start watching for records file changes
 	go WatchRecordsFile(config.Server.RecordsFile)
-	
+
 	return config, nil
 }
 
@@ -114,12 +114,12 @@ func LoadRecords(filePath string) error {
 	if _, err := toml.DecodeFile(filePath, newRecords); err != nil {
 		return fmt.Errorf("failed to load records: %w", err)
 	}
-	
+
 	// Update records with lock to ensure thread safety
 	Records.mu.Lock()
 	Records.Records = newRecords.Records
 	Records.mu.Unlock()
-	
+
 	log.Printf("Loaded %d records from %s", len(newRecords.Records), filePath)
 	return nil
 }
@@ -131,12 +131,12 @@ func SaveConfig(config *Config, filePath string) error {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
 	defer f.Close()
-	
+
 	encoder := toml.NewEncoder(f)
 	if err := encoder.Encode(config); err != nil {
 		return fmt.Errorf("failed to encode config: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -147,12 +147,12 @@ func SaveRecords(filePath string, records *RecordsConfig) error {
 		return fmt.Errorf("failed to create records file: %w", err)
 	}
 	defer f.Close()
-	
+
 	encoder := toml.NewEncoder(f)
 	if err := encoder.Encode(records); err != nil {
 		return fmt.Errorf("failed to encode records: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -190,15 +190,15 @@ func WatchConfigFile(filePath string) {
 			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 				// Wait a short time to ensure the file is fully written
 				time.Sleep(100 * time.Millisecond)
-				
+
 				log.Printf("Config file changed: %s", filePath)
-				
+
 				_, err := LoadConfig(filePath)
 				if err != nil {
 					log.Printf("Error reloading config: %v", err)
 					continue
 				}
-				
+
 				log.Printf("Config reloaded successfully")
 			}
 
@@ -245,14 +245,14 @@ func WatchRecordsFile(filePath string) {
 			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 				// Wait a short time to ensure the file is fully written
 				time.Sleep(100 * time.Millisecond)
-				
+
 				log.Printf("Records file changed: %s", filePath)
-				
+
 				if err := LoadRecords(filePath); err != nil {
 					log.Printf("Error reloading records: %v", err)
 					continue
 				}
-				
+
 				log.Printf("Records reloaded successfully")
 			}
 
@@ -271,36 +271,36 @@ func MatchDomain(pattern, domain string) bool {
 	// Remove trailing dots
 	pattern = strings.TrimSuffix(pattern, ".")
 	domain = strings.TrimSuffix(domain, ".")
-	
+
 	// Case insensitive comparison
 	pattern = strings.ToLower(pattern)
 	domain = strings.ToLower(domain)
-	
+
 	// Exact match check
 	if pattern == domain {
 		return true
 	}
-	
+
 	// Handle unlimited subdomain wildcard (_**)
 	if strings.Contains(pattern, "_**") {
 		parts := strings.SplitN(pattern, "_**", 2)
 		base := parts[1]
-		
+
 		// Check if domain ends with the base part
 		return strings.HasSuffix(domain, base)
 	}
-	
+
 	// Handle individual wildcards (*)
 	if strings.Contains(pattern, "*") {
 		// Convert the pattern to a regex-like pattern
 		regexPattern := strings.ReplaceAll(pattern, ".", "\\.")
 		regexPattern = strings.ReplaceAll(regexPattern, "*", "[^.]*")
-		
+
 		// Match the pattern
 		matched, _ := filepath.Match(regexPattern, domain)
 		return matched
 	}
-	
+
 	// No match
 	return false
 }
@@ -309,15 +309,15 @@ func MatchDomain(pattern, domain string) bool {
 func FindMatchingRecord(domain string, recordType string) *RecordEntry {
 	Records.mu.RLock()
 	defer Records.mu.RUnlock()
-	
+
 	// Remove trailing dot from domain if present
 	domain = strings.TrimSuffix(domain, ".")
-	
+
 	for _, record := range Records.Records {
 		if MatchDomain(record.Domain, domain) && record.Type == recordType {
 			return &record
 		}
 	}
-	
+
 	return nil
 }
